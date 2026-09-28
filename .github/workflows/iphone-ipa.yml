@@ -1,0 +1,67 @@
+name: Build iPhone IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iphone-ipa
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - name: Read reviewed source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Extract reviewed source archive when used
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          archive = pathlib.Path('iphone-source.zip')
+          if archive.exists():
+              expected = pathlib.Path('iphone-source.sha256').read_text().split()[0]
+              assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected, 'Source checksum mismatch'
+              with zipfile.ZipFile(archive) as z:
+                  for info in z.infolist():
+                      p = pathlib.PurePosixPath(info.filename)
+                      assert not p.is_absolute() and '..' not in p.parts and p.parts[0] == 'ios', 'Unsafe source path'
+                  z.extractall('.')
+          assert pathlib.Path('ios/DentalArchCapture.xcodeproj/project.pbxproj').is_file()
+          PY
+      - name: Compile and run iPhone simulator tests
+        run: python3 ios/run_mac_checks.py
+      - name: Build and verify unsigned iPhone IPA
+        run: python3 ios/build_ipa.py --output ios/IPA-output
+      - name: Keep iPhone IPA and verification report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: DentalArchLab-iPhone-IPA
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ios/IPA-output/*.ipa
+            ios/IPA-output/*.sha256.txt
+            ios/IPA-output/build-report.json
+            ios/IPA-output/KURULUM.txt
+      - name: Keep compiler and test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: DentalArchLab-iOS-test-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ios/Validation-Mac/*/*.log
+            ios/Validation-Mac/*/report.json
+            ios/Validation-Mac/*/Tests.xcresult/
+            ios/IPA-output/device-build.log
+            ios/IPA-output/build-report.json
